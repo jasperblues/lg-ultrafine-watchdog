@@ -1,0 +1,17 @@
+#!/bin/sh
+# Make sure the LG UltraFine 5K's USB side (Intel Titan Ridge xHCI, 8086:15f0) is
+# enumerated after the display is authorized on Thunderbolt. Sometimes the PCIe link
+# comes up but nothing gets scanned; a rescan fixes it. Rescan only if it's missing,
+# and never while the display is flapping (a drop in the last 30 s).
+exec 9>/run/lg-usb-ensure.lock
+flock -n 9 || exit 0          # one check at a time
+for delay in 20 40; do
+    sleep "$delay"
+    grep -qs '0x15f0' /sys/bus/pci/devices/*/device && continue
+    if journalctl -k --since "-30 s" --no-pager -o cat | grep -q 'thunderbolt [0-9]*-2: device disconnected'; then
+        logger -t lg-usb-ensure "LG USB controller missing but display is flapping; not rescanning"
+        continue
+    fi
+    logger -t lg-usb-ensure "LG USB controller missing, rescanning PCI"
+    echo 1 > /sys/bus/pci/rescan
+done

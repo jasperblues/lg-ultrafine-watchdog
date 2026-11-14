@@ -82,6 +82,10 @@ Not part of this repo, but they cost hours to find:
   libinput quirk hiding `SW_TABLET_MODE` from the `AMD SFH tablet mode switch`.
 - **The LG's USB/speakers sometimes don't appear:** the PCIe tunnel comes up but
   nothing is enumerated; `echo 1 | sudo tee /sys/bus/pci/rescan` brings them up.
+  `extras/` has a udev rule + helper that does this automatically (only when the
+  LG's USB controller is missing, and never while it is flapping):
+  `sudo install -m755 extras/lg-usb-ensure /usr/local/sbin/ && sudo install -m644
+  extras/91-lg-ultrafine-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules`
 - **Don't open the LG's built-in camera** if it's failing: on this unit, opening it
   crashed the display's data side and took the link down.
 

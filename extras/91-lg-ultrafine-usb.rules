@@ -1,0 +1,3 @@
+# LG UltraFine 5K on Thunderbolt: once authorized, make sure its USB side shows up.
+# The helper takes a lock, so repeated events while flapping don't pile up.
+ACTION=="add|change", SUBSYSTEM=="thunderbolt", ATTR{vendor}=="0x1e", ATTR{device}=="0x1114", ATTR{authorized}=="1", RUN+="/usr/bin/systemd-run --no-block --collect /usr/local/sbin/lg-usb-ensure"
