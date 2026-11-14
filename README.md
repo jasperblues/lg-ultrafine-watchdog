@@ -31,8 +31,14 @@ Fedora 45, with an LG UltraFine 5K that also charges the laptop over the same ca
 - On this laptop, one USB-C port is much more forgiving than the other (charger
   plug/unplug and charging start don't affect it). Try both.
 
-**What cures the flapping:** letting the laptop charge again. Turning the charge
-limit off stops it instantly. Restarting the Thunderbolt controller does not.
+**What cures the flapping:** giving the laptop a reason to draw power again.
+Turning the charge limit off stops it instantly while the battery isn't full;
+plugging in the laptop's own (barrel) charger stops it instantly in every case.
+Restarting the Thunderbolt controller does not.
+
+**Most stable setup found:** laptop charger plugged in *and* the display on the
+more forgiving USB-C port. That survived a full battery, charge-limit changes and
+charger plug/unplug.
 
 ## What the watchdog does
 
@@ -40,9 +46,13 @@ limit off stops it instantly. Restarting the Thunderbolt controller does not.
    `thunderbolt N-2: device disconnected`.
 2. On **3 or more drops within 30 seconds**, turns the charge limit **off** via
    UPower and shows a desktop notification. At most once every 5 minutes.
-3. When the display has been gone for **60 seconds** (you undocked), turns the
-   charge limit back **on** — but only if the watchdog was the one that turned it
-   off. State lives in `~/.local/state/lg-watchdog.json`.
+3. If the limit is already off (battery full), it notifies you to plug in the
+   laptop charger, which stops the flapping.
+4. While docked, holds a systemd-logind `handle-lid-switch` inhibitor, so a display
+   drop with the lid closed can't send the laptop to sleep (and wake into a mess).
+5. When the display has been gone for **60 seconds** (you undocked), releases the
+   inhibitor and turns the charge limit back **on** — but only if the watchdog was
+   the one that turned it off. State lives in `~/.local/state/lg-watchdog.json`.
 
 Logs: `journalctl --user -u lg-watchdog -f`.
 

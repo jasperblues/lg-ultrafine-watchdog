@@ -12,7 +12,9 @@ What this does:
     limit off via UPower (no root needed) and shows a notification
   * when the LG has been gone for UNDOCK_GRACE seconds (undocked), turns the
     charge limit back on -- but only if this watchdog turned it off and nobody
-    re-enabled it in the meantime
+    re-enabled it in the meantime (disable with RESTORE_LIMIT_ON_UNDOCK = False)
+  * while docked, holds a systemd-logind "handle-lid-switch" inhibitor so a
+    display drop with the lid closed can't send the laptop to sleep
 """
 import json
 import logging
@@ -28,6 +30,7 @@ FLAP_DROPS = 3
 FLAP_WINDOW = 30        # seconds
 COOLDOWN = 300          # min seconds between interventions
 UNDOCK_GRACE = 60       # LG absent this long => undocked
+RESTORE_LIMIT_ON_UNDOCK = os.environ.get("LG_WATCHDOG_RESTORE_LIMIT", "1") == "1"
 STATE = os.path.expanduser("~/.local/state/lg-watchdog.json")
 BATTERY = "/org/freedesktop/UPower/devices/battery_BAT0"
 
@@ -55,6 +58,47 @@ class Battery:
                    GLib.Variant("(b)", (enabled,)))
 
 
+def lg_connected_now():
+    """True if an LG UltraFine 5K is currently enumerated on Thunderbolt."""
+    base = "/sys/bus/thunderbolt/devices"
+    for dev in os.listdir(base):
+        try:
+            with open(f"{base}/{dev}/vendor") as v, open(f"{base}/{dev}/device") as d:
+                if v.read().strip() == "0x1e" and d.read().strip() == "0x1114":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+class LidInhibitor:
+    """Hold a logind handle-lid-switch block while docked."""
+
+    def __init__(self):
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.fd = None
+
+    def hold(self):
+        if self.fd is not None:
+            return
+        try:
+            res, fds = self.bus.call_with_unix_fd_list_sync(
+                "org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+                "Inhibit", GLib.Variant("(ssss)", ("handle-lid-switch", "LG watchdog",
+                                                   "LG display docked; don't suspend if it blinks", "block")),
+                GLib.VariantType.new("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+            self.fd = fds.get(res.unpack()[0])
+            log.info("docked: holding lid-switch inhibitor")
+        except GLib.Error as e:
+            log.warning("could not take lid inhibitor: %s", e.message)
+
+    def release(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+            log.info("undocked: released lid-switch inhibitor")
+
+
 def notify(summary, body):
     subprocess.run(["notify-send", "--app-name=LG watchdog", "--icon=video-display", summary, body],
                    check=False)
@@ -77,11 +121,14 @@ def save_state(state):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     battery = Battery()
+    lid = LidInhibitor()
     state = load_state()
     drops = []
     last_action = 0.0
-    lg_present = True
-    lg_gone_since = None
+    lg_present = lg_connected_now()
+    lg_gone_since = None if lg_present else time.monotonic()
+    if lg_present:
+        lid.hold()
 
     follow = subprocess.Popen(["journalctl", "-k", "-f", "-n", "0", "-o", "cat"],
                               stdout=subprocess.PIPE, text=True)
@@ -102,6 +149,7 @@ def main():
             elif CONNECT.search(line):
                 lg_present = True
                 lg_gone_since = None
+                lid.hold()
 
         drops = [t for t in drops if now - t <= FLAP_WINDOW]
 
@@ -120,15 +168,19 @@ def main():
                            "display settles. It will be turned back on when you undock.")
                 else:
                     log.info("flapping, but the charge limit is already off")
-                    notify("LG display is flapping",
-                           "The charge limit is already off. If it keeps dropping, unplug and "
-                           "replug the display.")
+                    notify("LG display is flapping — plug in the laptop charger",
+                           "The charge limit is already off, so letting the laptop charge "
+                           "can't settle it (battery full). Plugging in the laptop's own charger "
+                           "stops it instantly; otherwise unplug and replug the display.")
             except GLib.Error as e:
                 log.warning("could not change charge limit: %s", e.message)
 
+        undocked = not lg_present and lg_gone_since is not None and now - lg_gone_since >= UNDOCK_GRACE
+        if undocked:
+            lid.release()
+
         # Undocked: restore the charge limit if we were the ones who turned it off.
-        if (state.get("we_disabled_limit") and not lg_present and lg_gone_since is not None
-                and now - lg_gone_since >= UNDOCK_GRACE):
+        if RESTORE_LIMIT_ON_UNDOCK and state.get("we_disabled_limit") and undocked:
             try:
                 if not battery.limit_enabled():
                     battery.set_limit(True)
