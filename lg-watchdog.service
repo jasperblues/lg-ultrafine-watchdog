@@ -1,0 +1,12 @@
+[Unit]
+Description=LG UltraFine 5K flapping watchdog (turns charge limit off when the display flaps)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I %h/projects/lg-ultrafine-watchdog/lg_watchdog.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
